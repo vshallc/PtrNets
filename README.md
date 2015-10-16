@@ -4,9 +4,13 @@ An implementation of Pointer Networks [arXiv:1506.03134](http://arxiv.org/abs/15
 
 ## Usage
 To generate training data
+
     >> python misc/tsp.py tsp.pkl.gz
+    
 This will generate the training data, add the data path to ptrnets.py (or change the default path in data_util), then start training:
+
     >> python ptrnets.py
+    
 
 
 ## References
