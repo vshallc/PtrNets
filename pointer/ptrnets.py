@@ -565,6 +565,7 @@ def train_lstm(
                     print 'example b'
                     print route2
                     print cost2
+                    sys.stdout.flush()
 
                 if saveto and numpy.mod(uidx, saveFreq) == 0:
                     print 'Saving...',
@@ -608,6 +609,10 @@ def train_lstm(
         print "Training interrupted"
 
     end_time = time.time()
+    if best_p is not None:
+        zipp(best_p, tparams)
+    else:
+        best_p = unzip(tparams)
 
     kf_train_sorted = get_minibatches_idx(len(train), batch_size)
     train_tour = tour_efficiency(f_encode, f_probi, prepare_data, train, kf_train_sorted, model_options)
