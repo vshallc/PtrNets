@@ -592,7 +592,7 @@ def train_lstm(
                     # print ('Train ', train_tour, 'Valid ', valid_tour, 'Test ', test_tour)
                     print ('Valid ', valid_tour, 'Test ', test_tour)
 
-                    if len(history_tour) > patience and valid_tour >= numpy.array(history_tour)[:-patience, 0].min():
+                    if len(history_tour) > patience and valid_tour >= numpy.array(history_tour)[-patience:, 0].min():
                         bad_counter += 1
                         if bad_counter > patience:
                             print 'Early Stop!'
