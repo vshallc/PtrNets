@@ -1,5 +1,4 @@
 # PtrNets
-Pointer Networks
 An implementation of Pointer Networks [arXiv:1506.03134](http://arxiv.org/abs/1506.03134)
 
 ## Usage
