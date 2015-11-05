@@ -585,7 +585,7 @@ def train_lstm(
 
                     history_tour.append([valid_tour, test_tour])
 
-                    if uidx == 1 or valid_tour < numpy.array(history_tour)[:, 0].min():
+                    if best_p is None or valid_tour <= numpy.array(history_tour)[:, 0].min():
                         best_p = unzip(tparams)
                         bad_counter = 0
 
