@@ -9,10 +9,13 @@ import theano
 from theano import config
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
+from shapely.geometry.polygon import Polygon
 import data_utils
 
-datasets = {'tsp': (data_utils.load_data, data_utils.prepare_data)}
+datasets = {
+    'tsp': (data_utils.load_data, data_utils.prepare_data),     # TSP
+    'ch': (data_utils.load_data, data_utils.prepare_data)       # Convex Hull
+}
 
 # Set the random number generators' seeds for consistency
 SEED = 123
@@ -177,8 +180,7 @@ def sgd(lr, tparams, grads, x, x_mask, yin, yin_mask, yid, yid_mask, cost):
 
     # Function that updates the weights from the previously computed
     # gradient.
-    f_update = theano.function([lr], [], updates=pup,
-                               name='sgd_f_update')
+    f_update = theano.function([lr], [], updates=pup, name='sgd_f_update')
 
     return f_grad_shared, f_update
 
@@ -375,9 +377,7 @@ def tour_length(problem, route):
     return length
 
 
-def tour_efficiency(f_encode, f_probi, prepare_data, data, iterator, options):
-    # routes = []
-    # costs = []
+def tsp_eva(f_encode, f_probi, prepare_data, data, iterator, options):
     len_sum = 0
     for _, valid_index in iterator:
         tspv = [data[t] for t in valid_index]
@@ -389,6 +389,68 @@ def tour_efficiency(f_encode, f_probi, prepare_data, data, iterator, options):
             len_sum += tour_length(v[:, s, :], route[s])
     len_sum /= len(data)
     return len_sum
+
+
+def gen_hull(p, p_mask, f_encode, f_probi, options):
+    # p: n_sizes * n_samples * data_dim
+    n_sizes = p.shape[0]
+    n_samples = p.shape[1] if p.ndim == 3 else 1
+    hprev = f_encode(p_mask, p)  # n_sizes * n_samples * data_dim
+    points = numpy.zeros((n_samples, n_sizes), dtype='int64')
+    h = hprev[-1]
+    c = numpy.zeros((n_samples, options['dim_proj']), dtype=config.floatX)
+    xi = numpy.zeros((n_samples,), dtype='int64')
+    xi_mask = numpy.ones((n_samples,), dtype=config.floatX)
+    for i in range(n_sizes):
+        h, c, probi = f_probi(p_mask[i], xi, h, c, hprev, p_mask, p)
+        xi = probi.argmax(axis=0)
+        xi *= xi_mask
+        xi_mask = (numpy.not_equal(xi, 0)).astype(config.floatX)
+        if numpy.equal(xi_mask, 0).all():
+            break
+        points[:, i] = xi
+    return points
+
+
+def hull_accuracy(problem, result, target):
+    nzr = numpy.nonzero(result)[0]
+    nzt = numpy.nonzero(target)[0]
+    result = result[nzr]
+    target = target[nzt]
+    if len(result) < 3 or len(set(result)) != len(result):
+        return -1.0, 0.0
+    pp = Polygon(problem[result])
+    if pp.is_valid:
+        # intersected area
+        tt = Polygon(problem[target])
+        intersection = tt.intersection(pp)
+        intersec_per = intersection.area / tt.area
+        if set(result) == set(target):
+            return 1.0, intersec_per
+        else:
+            return 0.0, intersec_per
+    else:
+        return -1.0, 0.0
+
+
+def ch_eva(f_encode, f_probi, prepare_data, data, iterator, options):
+    accuracy = 0.0
+    counter = 0.0
+    area = 0.0
+    for _, valid_index in iterator:
+        chv = [data[t] for t in valid_index]
+        v, vm, vx, vxm, vy, vym = prepare_data(chv)
+        r = gen_hull(v, vm, f_encode, f_probi, options)
+        hull_idx = r
+        for s in range(hull_idx.shape[0]):
+            acc, area_per = hull_accuracy(v[:, s, :], hull_idx[s, :], vy[:, s])
+            if acc >= 0:
+                accuracy += acc
+                counter += 1
+                area += area_per
+    if counter > 0:
+        return 1 - accuracy / len(data), counter / len(data), area / counter
+    return 1.0, 0.0, 0.0
 
 
 def build_model(tparams, options):
@@ -432,21 +494,16 @@ def build_model(tparams, options):
 
 def train_lstm(
         dim_proj=128,  # LSTM number of hidden units.
-        max_steps=50,
         patience=10,  # Number of epoch to wait before early stop if no progress
         max_epochs=5000,  # The maximum number of epoch to run
         dispFreq=10,  # Display to stdout the training progress every N updates
         decay_c=0.,  # Weight decay for the classifier applied to the U weights.
         lrate=0.01,  # Learning rate for sgd (not used for adadelta and rmsprop)
-        n_words=10000,  # Vocabulary size
         optimizer=rmsprop,
         # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
-        # encoder='deep_lstm',
-        depth=4,
-        decoder_depth=1,
+        depth=2,
         saveto='ptr_model.npz',  # The best model will be saved there
         validFreq=370,  # Compute the validation error after this number of update.
-        genFreq=100,
         saveFreq=1110,  # Save the parameters after every saveFreq updates
         maxlen=100,  # Sequence longer then this get ignored
         batch_size=16,  # The batch size during training.
@@ -458,7 +515,6 @@ def train_lstm(
         use_dropout=False,  # if False slightly faster, but worst test error
         # This frequently need a bigger model.
         reload_model=None,  # Path to a saved model we want to start from.
-        test_size=-1,  # If >0, we keep only this number of test example.
 ):
     model_options = locals().copy()
     load_data, prepare_data = get_dataset(dataset)
@@ -497,7 +553,7 @@ def train_lstm(
     print "%d valid examples" % len(valid)
     print "%d test examples" % len(test)
 
-    history_tour = []
+    history_err = []
     best_p = None
     bad_counter = 0
 
@@ -510,25 +566,9 @@ def train_lstm(
     eidx = 0
     estop = False
     start_time = time.time()
-
-    a = numpy.asarray([[[0., 0., ]],
-                       [[0.2, 0.5]],
-                       [[0.8, 0.5]],
-                       [[0.5, 0.9]],
-                       [[0.2, 0.4]],
-                       [[0.9, 0.1]]], dtype=config.floatX)
-    b = numpy.asarray([[[0., 0., ]],
-                       [[0.1, 0.1]],
-                       [[0.7, 0.3]],
-                       [[0.6, 0.6]],
-                       [[0.3, 0.9]],
-                       [[0.8, 0.8]]], dtype=config.floatX)
-    am = numpy.asarray([[0.],
-                        [1.],
-                        [1.],
-                        [1.],
-                        [1.],
-                        [1.]], dtype=config.floatX)
+    train_err = 0.0
+    valid_err = 0.0
+    test_err = 0.0
 
     try:
         for eidx in xrange(max_epochs):
@@ -538,11 +578,11 @@ def train_lstm(
 
             for _, train_index in kf:
                 uidx += 1
-                tsps = [train[t] for t in train_index]
+                batch_samples = [train[t] for t in train_index]
                 # Get the data in numpy.ndarray format
                 # This swap the axis!
                 # Return something of shape (minibatch maxlen, n samples)
-                p, p_mask, x, x_mask, y, y_mask = prepare_data(tsps)
+                p, p_mask, x, x_mask, y, y_mask = prepare_data(batch_samples)
                 n_samples += p.shape[1]
 
                 cost = f_grad_shared(p, p_mask, x, x_mask, y, y_mask)
@@ -555,49 +595,48 @@ def train_lstm(
                 if numpy.mod(uidx, dispFreq) == 0:
                     print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost
 
-                if numpy.mod(uidx, genFreq) == 0:
-                    params = unzip(tparams)
-                    route1, cost1 = gen_model(a, am, f_encode, f_probi, model_options)
-                    route2, cost2 = gen_model(b, am, f_encode, f_probi, model_options)
-                    print 'example a'
-                    print route1
-                    print cost1
-                    print 'example b'
-                    print route2
-                    print cost2
-                    sys.stdout.flush()
-
                 if saveto and numpy.mod(uidx, saveFreq) == 0:
                     print 'Saving...',
+                    sys.stdout.flush()
 
                     if best_p is not None:
                         params = best_p
                     else:
                         params = unzip(tparams)
-                    numpy.savez(saveto, history_ppls=history_tour, **params)
+                    numpy.savez(saveto, history_ppls=history_err, **params)
                     pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'), -1)
                     print 'Done'
+                    sys.stdout.flush()
 
                 if numpy.mod(uidx, validFreq) == 0:
-                    # train_tour = tour_efficiency(f_encode, f_probi, prepare_data, train, kf, model_options)
-                    valid_tour = tour_efficiency(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
-                    test_tour = tour_efficiency(f_encode, f_probi, prepare_data, test, kf_test, model_options)
+                    if dataset == 'tsp':  # for TSP error is the tour length
+                        # train_err = tsp_eva(f_encode, f_probi, prepare_data, train, kf, model_options)
+                        valid_err = tsp_eva(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
+                        test_err = tsp_eva(f_encode, f_probi, prepare_data, test, kf_test, model_options)
+                        print ('Valid ', valid_err, 'Test ', test_err)
+                    elif dataset == 'ch':
+                        # train_err, train_success, train_area = \
+                        #     ch_eva(f_encode, f_probi, prepare_data, train, kf, model_options)
+                        valid_err, valid_success, valid_area = \
+                            ch_eva(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
+                        test_err, test_success, test_area = \
+                            ch_eva(f_encode, f_probi, prepare_data, test, kf_test, model_options)
+                        print ('Valid ', valid_err, valid_success, valid_area,
+                               'Test ', test_err, test_success, test_area)
 
-                    history_tour.append([valid_tour, test_tour])
+                    history_err.append([valid_err, test_err])
 
-                    if best_p is None or valid_tour <= numpy.array(history_tour)[:, 0].min():
+                    if best_p is None or valid_err <= numpy.array(history_err)[:, 0].min():
                         best_p = unzip(tparams)
                         bad_counter = 0
 
-                    # print ('Train ', train_tour, 'Valid ', valid_tour, 'Test ', test_tour)
-                    print ('Valid ', valid_tour, 'Test ', test_tour)
-
-                    if len(history_tour) > patience and valid_tour >= numpy.array(history_tour)[:-patience, 0].min():
+                    if len(history_err) > patience and valid_err >= numpy.array(history_err)[:-patience, 0].min():
                         bad_counter += 1
                         if bad_counter > patience:
                             print 'Early Stop!'
                             estop = True
                             break
+                    sys.stdout.flush()
 
             print 'Seen %d samples' % n_samples
             sys.stdout.flush()
@@ -615,37 +654,39 @@ def train_lstm(
         best_p = unzip(tparams)
 
     kf_train_sorted = get_minibatches_idx(len(train), batch_size)
-    train_tour = tour_efficiency(f_encode, f_probi, prepare_data, train, kf_train_sorted, model_options)
-    valid_tour = tour_efficiency(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
-    test_tour = tour_efficiency(f_encode, f_probi, prepare_data, test, kf_test, model_options)
-
-    print ('Train ', train_tour, 'Valid ', valid_tour, 'Test ', test_tour)
+    if dataset == 'tsp':  # for TSP error is the tour length
+        train_err = tsp_eva(f_encode, f_probi, prepare_data, train, kf_train_sorted, model_options)
+        valid_err = tsp_eva(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
+        test_err = tsp_eva(f_encode, f_probi, prepare_data, test, kf_test, model_options)
+        print ('Train ', train_err, 'Valid ', valid_err, 'Test ', test_err)
+    elif dataset == 'ch':  # for Convex Hull
+        train_err, train_success, train_area = ch_eva(f_encode, f_probi, prepare_data, train, kf_train_sorted, model_options)
+        valid_err, valid_success, valid_area = ch_eva(f_encode, f_probi, prepare_data, valid, kf_valid, model_options)
+        test_err, test_success, test_area = ch_eva(f_encode, f_probi, prepare_data, test, kf_test, model_options)
+        print ('Train ', train_err, train_success, train_area, 'Valid ', valid_err, valid_success, valid_area, 'Test ', test_err, test_success, test_area)
     if saveto:
-        numpy.savez(saveto, train_tour=train_tour, valid_tour=valid_tour, test_tour=test_tour,
-                    history_tour=history_tour,
+        numpy.savez(saveto, train_err=train_err, valid_err=valid_err, test_err=test_err,
+                    history_err=history_err,
                     **best_p)
     print 'The code run for %d epochs, with %f sec/epochs' % ((eidx + 1), (end_time - start_time) / (1. * (eidx + 1)))
     print >> sys.stderr, ('Training took %.1fs' % (end_time - start_time))
 
-    return train_tour, valid_tour, test_tour
+    return train_err, valid_err, test_err
 
 
 if __name__ == '__main__':
     # See function train for all possible parameter and there definition.
     train_lstm(
-        max_epochs=10000,
-        max_steps=10,
+        dataset='ch',  # dataset = 'tsp' or 'ch'
+        max_epochs=1000,
         patience=50,
         dim_proj=256,
         lrate=1.0,
-        validFreq=1000,
-        saveFreq=5000,
-        dispFreq=100,
-        genFreq=100,
-        depth=2,
+        validFreq=512,
+        saveFreq=8192,
+        dispFreq=128,
         batch_size=128,
         valid_batch_size=10,
-        use_dropout=False,
-        optimizer=rmsprop,
-        saveto=None,
+        optimizer=sgd,
+        saveto='ch_model.npz',
     )

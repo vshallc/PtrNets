@@ -64,9 +64,9 @@ def generate_test_examples(num, n_min, n_max):
 if __name__ == '__main__':
     # planar tsp
     # this can be very slow for large n_max
-    e_train = generate_examples(1000000, 5, 10)
-    e_valid = generate_examples(5000, 10, 10)
-    e_test = generate_examples(10000, 10, 10)
+    e_train = generate_examples(1048576, 5, 10)
+    e_valid = generate_examples(1000, 5, 10)
+    e_test = generate_examples(1000, 10, 10)
     obj = (e_train, e_valid, e_test)
 
     # generating test examples only
