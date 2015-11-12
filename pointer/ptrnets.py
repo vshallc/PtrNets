@@ -2,6 +2,7 @@ from collections import OrderedDict
 import cPickle as pkl
 import sys
 import time
+import argparse
 
 import random
 import numpy
@@ -158,7 +159,7 @@ def init_tparams(params):
     return tparams
 
 
-def sgd(lr, tparams, grads, x, x_mask, yin, yin_mask, yid, yid_mask, cost):
+def sgd(lr, tparams, grads, p, p_mask, x, x_mask, y, y_mask, cost):
     """ Stochastic Gradient Descent
 
     :note: A more complicated version of sgd then needed.  This is
@@ -167,16 +168,16 @@ def sgd(lr, tparams, grads, x, x_mask, yin, yin_mask, yid, yid_mask, cost):
     """
     # New set of shared variable that will contain the gradient
     # for a mini-batch.
-    gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
-               for k, p in tparams.iteritems()]
+    gshared = [theano.shared(v.get_value() * 0., name='%s_grad' % k)
+               for k, v in tparams.iteritems()]
     gsup = [(gs, g) for gs, g in zip(gshared, grads)]
 
     # Function that computes gradients for a mini-batch, but do not
     # updates the weights.
-    f_grad_shared = theano.function([x, x_mask, yin, yin_mask, yid, yid_mask], cost, updates=gsup,
+    f_grad_shared = theano.function([p, p_mask, x, x_mask, y, y_mask], cost, updates=gsup,
                                     name='sgd_f_grad_shared')
 
-    pup = [(p, p - lr * g) for p, g in zip(tparams.values(), gshared)]
+    pup = [(v, v - lr * g) for v, g in zip(tparams.values(), gshared)]
 
     # Function that updates the weights from the previously computed
     # gradient.
@@ -515,12 +516,13 @@ def train_lstm(
         use_dropout=False,  # if False slightly faster, but worst test error
         # This frequently need a bigger model.
         reload_model=None,  # Path to a saved model we want to start from.
+        datapath='data.pkl.gz',
 ):
     model_options = locals().copy()
     load_data, prepare_data = get_dataset(dataset)
 
     print 'Loading data'
-    train, valid, test = load_data()
+    train, valid, test = load_data(path=datapath)
 
     model_options['data_dim'] = train[0][0][0].shape[0]  # data_dim = 2, i.e (x,y)
 
@@ -603,7 +605,7 @@ def train_lstm(
                         params = best_p
                     else:
                         params = unzip(tparams)
-                    numpy.savez(saveto, history_ppls=history_err, **params)
+                    numpy.savez(saveto, history_err=history_err, **params)
                     pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'), -1)
                     print 'Done'
                     sys.stdout.flush()
@@ -675,18 +677,40 @@ def train_lstm(
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Pointer Networks")
+    parser.add_argument('-d', '--dim', type=int, default=256, help='dimension')
+    parser.add_argument('-b', '--batch', type=int, default=128, help='batch size')
+    parser.add_argument('-l', '--lrate', type=float, default=1.0, help='learning rate')
+    parser.add_argument('-e', '--epochs', type=int, default=1000, help='max training epochs')
+    parser.add_argument('-p', '--patience', type=int, default=50, help='patience for early stopping')
+    parser.add_argument('-o', '--optimizer', choices=['sgd', 'rmsprop'], default='rmsprop', help='optimizer')
+    parser.add_argument('-r', '--reload', default=None, help='reload model')
+    parser.add_argument('--dispf', type=int, default=128, help='display frequency')
+    parser.add_argument('--validf', type=int, default=512, help='validation frequency')
+    parser.add_argument('--savef', type=int, default=8192, help='saving frequency')
+    parser.add_argument('task', choices=['ch', 'tsp'], help='task')
+    parser.add_argument('datapath', help='path to training data.')
+    parser.add_argument('saveto', help='save the model to...')
+    args = parser.parse_args()
+    opts = args.optimizer
+    if opts == 'rmsprop':
+        opt = rmsprop
+    else:
+        opt = sgd
     # See function train for all possible parameter and there definition.
     train_lstm(
-        dataset='ch',  # dataset = 'tsp' or 'ch'
-        max_epochs=1000,
-        patience=50,
-        dim_proj=256,
-        lrate=1.0,
-        validFreq=512,
-        saveFreq=8192,
-        dispFreq=128,
-        batch_size=128,
+        dataset=args.task,  # dataset = 'tsp' or 'ch'
+        max_epochs=args.epochs,
+        patience=args.patience,
+        dim_proj=args.dim,
+        lrate=args.lrate,
+        validFreq=args.validf,
+        saveFreq=args.savef,
+        dispFreq=args.dispf,
+        batch_size=args.batch,
         valid_batch_size=10,
-        optimizer=sgd,
-        saveto='ch_model.npz',
+        optimizer=opt,
+        saveto=args.saveto,
+        datapath=args.datapath,
+        reload_model=args.reload,
     )
