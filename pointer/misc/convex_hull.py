@@ -9,7 +9,7 @@ def generate_one_example(n_nodes):
     points = numpy.random.rand(n_nodes, 2)
     hull = ConvexHull(points)  # scipy.spatial.ConvexHull will generate points in CCW order
     v = hull.vertices
-    v = numpy.roll(v, -list(v).index(numpy.min(v)))  # start from the smallest indice
+    # v = numpy.roll(v, -list(v).index(numpy.min(v)))  # start from the smallest indice
     return points, v + 1
 
 

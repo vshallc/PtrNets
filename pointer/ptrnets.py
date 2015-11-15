@@ -217,6 +217,34 @@ def rmsprop(lr, tparams, grads, p, p_mask, x, x_mask, y, y_mask, cost):
     return f_grad_shared, f_update
 
 
+def adadelta(lr, tparams, grads, p, p_mask, x, x_mask, y, y_mask, cost):
+    zipped_grads = [theano.shared(q.get_value() * numpy_floatX(0.), name='%s_grad' % k)
+                    for k, q in tparams.iteritems()]
+    running_up2 = [theano.shared(q.get_value() * numpy_floatX(0.),name='%s_rup2' % k)
+                   for k, q in tparams.iteritems()]
+    running_grads2 = [theano.shared(q.get_value() * numpy_floatX(0.),name='%s_rgrad2' % k)
+                      for k, q in tparams.iteritems()]
+
+    zgup = [(zg, g) for zg, g in zip(zipped_grads, grads)]
+    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g ** 2))
+             for rg2, g in zip(running_grads2, grads)]
+
+    f_grad_shared = theano.function([p, p_mask, x, x_mask, y, y_mask], cost, updates=zgup + rg2up,
+                                    name='adadelta_f_grad_shared')
+
+    updir = [-tensor.sqrt(ru2 + 1e-6) / tensor.sqrt(rg2 + 1e-6) * zg
+             for zg, ru2, rg2 in zip(zipped_grads, running_up2, running_grads2)]
+    ru2up = [(ru2, 0.95 * ru2 + 0.05 * (ud ** 2))
+             for ru2, ud in zip(running_up2, updir)]
+    param_up = [(q, q + ud) for q, ud in zip(tparams.values(), updir)]
+
+    f_update = theano.function([lr], [], updates=ru2up + param_up,
+                               on_unused_input='ignore',
+                               name='adadelta_f_update')
+
+    return f_grad_shared, f_update
+
+
 def ptr_network(tparams, p, p_mask, x, x_mask, xi, xi_mask, hidi, celi, hids, options):
     n_sizes = p.shape[0]
     n_samples = p.shape[1] if p.ndim == 3 else 1
@@ -684,7 +712,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epochs', type=int, default=1000, help='max training epochs')
     parser.add_argument('-p', '--patience', type=int, default=50, help='patience for early stopping')
     parser.add_argument('-o', '--optimizer', choices=['sgd', 'rmsprop'], default='rmsprop', help='optimizer')
-    parser.add_argument('-r', '--reload', default=None, help='reload model')
+    parser.add_argument('-r', '--reload', default=False, help='reload model')
     parser.add_argument('--dispf', type=int, default=128, help='display frequency')
     parser.add_argument('--validf', type=int, default=512, help='validation frequency')
     parser.add_argument('--savef', type=int, default=8192, help='saving frequency')
