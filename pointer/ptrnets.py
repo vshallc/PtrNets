@@ -723,6 +723,8 @@ if __name__ == '__main__':
     opts = args.optimizer
     if opts == 'rmsprop':
         opt = rmsprop
+    elif opts == 'adadelta':
+        opt = adadelta
     else:
         opt = sgd
     # See function train for all possible parameter and there definition.
