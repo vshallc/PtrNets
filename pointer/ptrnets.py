@@ -433,7 +433,7 @@ def gen_hull(p, p_mask, f_encode, f_probi, options):
     for i in range(n_sizes):
         h, c, probi = f_probi(p_mask[i], xi, h, c, hprev, p_mask, p)
         xi = probi.argmax(axis=0)
-        xi = xi * xi_mask  # Avoid compatibility problem in numpy 1.10
+        xi *= xi_mask.astype(numpy.int64)  # Avoid compatibility problem in numpy 1.10
         xi_mask = (numpy.not_equal(xi, 0)).astype(config.floatX)
         if numpy.equal(xi_mask, 0).all():
             break
