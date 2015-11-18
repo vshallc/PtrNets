@@ -433,7 +433,7 @@ def gen_hull(p, p_mask, f_encode, f_probi, options):
     for i in range(n_sizes):
         h, c, probi = f_probi(p_mask[i], xi, h, c, hprev, p_mask, p)
         xi = probi.argmax(axis=0)
-        xi *= xi_mask
+        xi = xi * xi_mask  # Avoid compatibility problem in numpy 1.10
         xi_mask = (numpy.not_equal(xi, 0)).astype(config.floatX)
         if numpy.equal(xi_mask, 0).all():
             break
@@ -711,7 +711,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--lrate', type=float, default=1.0, help='learning rate')
     parser.add_argument('-e', '--epochs', type=int, default=1000, help='max training epochs')
     parser.add_argument('-p', '--patience', type=int, default=50, help='patience for early stopping')
-    parser.add_argument('-o', '--optimizer', choices=['sgd', 'rmsprop'], default='rmsprop', help='optimizer')
+    parser.add_argument('-o', '--optimizer', choices=['sgd', 'rmsprop', 'adadelta'], default='rmsprop', help='optimizer')
     parser.add_argument('-r', '--reload', default=False, help='reload model')
     parser.add_argument('--dispf', type=int, default=128, help='display frequency')
     parser.add_argument('--validf', type=int, default=512, help='validation frequency')
